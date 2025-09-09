@@ -1,8 +1,8 @@
-- name: Region (People)
+- name: "Region (People)"
   dataType: string
   summarizeBy: none
-  sourceColumn: Region (People)
-- name: Regional Manager
+  sourceColumn: "Region (People)"
+- name: "Regional Manager"
   dataType: string
   summarizeBy: none
-  sourceColumn: Regional Manager
+  sourceColumn: "Regional Manager"
