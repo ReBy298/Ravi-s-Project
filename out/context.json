@@ -1,0 +1,40 @@
+{
+  "table": "Returned",
+  "connection": {
+    "server": "ENCDXPUSALT0101",
+    "dbname": "Demo Tableau",
+    "class": "sqlserver"
+  },
+  "metadata_records": [
+    {
+      "remote_name": "Returned",
+      "local_name": "[Returned]",
+      "parent_name": "[Returned]",
+      "local_type": "string",
+      "aggregation": "Count",
+      "precision": "",
+      "width": "50",
+      "contains_null": "false",
+      "ordinal": "26"
+    },
+    {
+      "remote_name": "Order_ID",
+      "local_name": "[Order_ID (Returned)]",
+      "parent_name": "[Returned]",
+      "local_type": "string",
+      "aggregation": "Count",
+      "precision": "",
+      "width": "50",
+      "contains_null": "false",
+      "ordinal": "27"
+    }
+  ],
+  "relationships_touching_table": [
+    {
+      "left_table": "Orders",
+      "left_column": "Order_ID",
+      "right_table": "Returned",
+      "right_column": "Order_ID (Returned)"
+    }
+  ]
+}
