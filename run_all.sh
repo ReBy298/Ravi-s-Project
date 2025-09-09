@@ -10,6 +10,7 @@ PROVIDER="${2:-azure}"
 MODEL="${3:-gpt-5-mini}"
 PBIP_NAME="${4:-SampleTableau.pbip}"
 TEMPLATE_NAME="${5:-PBIPTemplate.pbip}"
+TABLES="${6:-Orders,People,Returned}"   # <--- por defecto, las 3 tablas reales
 
 cd "$PROJECT_ROOT"
 
@@ -35,7 +36,6 @@ fi
 # Verifica que el orquestador esté junto al proyecto
 if [ ! -f "run_tableau_to_pbip.py" ]; then
   echo "ERROR: run_tableau_to_pbip.py no está en $PROJECT_ROOT"
-  echo "Colócalo ahí o ajusta esta ruta en el script."
   exit 1
 fi
 
@@ -43,6 +43,7 @@ python "run_tableau_to_pbip.py" \
   --project-root "$PROJECT_ROOT" \
   --provider "$PROVIDER" \
   --model "$MODEL" \
+  --tables "$TABLES" \
   --pbip-name "$PBIP_NAME" \
   --template-name "$TEMPLATE_NAME" \
   --force
