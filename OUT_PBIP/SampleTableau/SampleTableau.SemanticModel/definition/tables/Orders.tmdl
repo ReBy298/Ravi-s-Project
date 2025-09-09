@@ -1,80 +1,80 @@
 table Orders
-    column Category
+  column Category
       dataType: string
-      sourceColumn: Category
-    column City
+    sourceColumn: Category
+  column City
       dataType: string
-      sourceColumn: City
-    column Country_Region
+    sourceColumn: City
+  column Country_Region
       dataType: string
-      sourceColumn: Country_Region
-    column Customer_ID
+    sourceColumn: Country_Region
+  column Customer_ID
       dataType: string
-      sourceColumn: Customer_ID
-    column Customer_Name
+    sourceColumn: Customer_ID
+  column Customer_Name
       dataType: string
-      sourceColumn: Customer_Name
-    column Discount
+    sourceColumn: Customer_Name
+  column Discount
       dataType: double
       summarizeBy: sum
-      sourceColumn: Discount
-    column Order_Date
+    sourceColumn: Discount
+  column Order_Date
       dataType: dateTime
-      sourceColumn: Order_Date
-    column Order_ID
+    sourceColumn: Order_Date
+  column Order_ID
       dataType: string
-      sourceColumn: Order_ID
-    column Postal_Code
+    sourceColumn: Order_ID
+  column Postal_Code
       dataType: string
-      sourceColumn: Postal_Code
-    column Product_ID
+    sourceColumn: Postal_Code
+  column Product_ID
       dataType: string
-      sourceColumn: Product_ID
-    column Product_Name
+    sourceColumn: Product_ID
+  column Product_Name
       dataType: string
-      sourceColumn: Product_Name
-    column Profit
+    sourceColumn: Product_Name
+  column Profit
       dataType: double
       summarizeBy: sum
-      sourceColumn: Profit
-    column Quantity
+    sourceColumn: Profit
+  column Quantity
       dataType: int64
       summarizeBy: sum
-      sourceColumn: Quantity
-    column Region
+    sourceColumn: Quantity
+  column Region
       dataType: string
-      sourceColumn: Region
-    column Row_ID
+    sourceColumn: Region
+  column Row_ID
       dataType: int64
       summarizeBy: count
-      sourceColumn: Row_ID
-    column Sales
+    sourceColumn: Row_ID
+  column Sales
       dataType: double
       summarizeBy: sum
-      sourceColumn: Sales
-    column Segment
+    sourceColumn: Sales
+  column Segment
       dataType: string
-      sourceColumn: Segment
-    column Ship_Date
+    sourceColumn: Segment
+  column Ship_Date
       dataType: dateTime
-      sourceColumn: Ship_Date
-    column Ship_Mode
+    sourceColumn: Ship_Date
+  column Ship_Mode
       dataType: string
-      sourceColumn: Ship_Mode
-    column State_Province
+    sourceColumn: Ship_Mode
+  column State_Province
       dataType: string
-      sourceColumn: State_Province
-    column Sub_Category
+    sourceColumn: State_Province
+  column Sub_Category
       dataType: string
-      sourceColumn: Sub_Category
+    sourceColumn: Sub_Category
   partition Orders = m
     mode: import
     source =
       let
         Source = Sql.Databases("ENCDXPUSALT0101"),
-        srcSource = Source{[Name="Demo Tableau"]}[Data],
-        Orders_object = srcSource{[Item="Orders",Schema="dbo"]}[Data]
+        srcSource = Source{{[Name="Demo Tableau"]}}[Data],
+        Orders_object = srcSource{{[Item="Orders",Schema="dbo"]}}[Data]
       in
         Orders_object
 
-annotation PBI_ResultType = Table
+  annotation PBI_ResultType = Table
