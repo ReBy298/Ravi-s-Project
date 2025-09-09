@@ -1,0 +1,26 @@
+table People
+{
+  columns {
+    column 'Region (People)'
+    {
+      dataType: string
+      sourceColumn: 'Region (People)'
+    }
+    column 'Regional Manager'
+    {
+      dataType: string
+      sourceColumn: 'Regional Manager'
+    }
+  }
+  partitions {
+  partition People = m
+    mode: import
+    source =
+      let
+        Source = Sql.Databases("ENCDXPUSALT0101"),
+        srcSource = Source{{[Name="Demo Tableau"]}}[Data],
+        People_object = srcSource{{[Item="People",Schema="dbo"]}}[Data]
+      in
+        People_object
+  }
+}

@@ -23,10 +23,10 @@
   summarizeBy: sum
   sourceColumn: Discount
 - name: Order_Date
-  # variation: aggregation:Year
   dataType: dateTime
   summarizeBy: none
   sourceColumn: Order_Date
+  # variation: aggregation:Year
 - name: Order_ID
   dataType: string
   summarizeBy: none
@@ -68,10 +68,10 @@
   summarizeBy: none
   sourceColumn: Segment
 - name: Ship_Date
-  # variation: aggregation:Year
   dataType: dateTime
   summarizeBy: none
   sourceColumn: Ship_Date
+  # variation: aggregation:Year
 - name: Ship_Mode
   dataType: string
   summarizeBy: none

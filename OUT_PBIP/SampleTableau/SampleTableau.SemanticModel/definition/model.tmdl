@@ -1,0 +1,9 @@
+model
+{
+  culture: "en-US"
+  tables: {
+  
+    ref table Orders
+    ref table People
+    ref table Returned}
+}
