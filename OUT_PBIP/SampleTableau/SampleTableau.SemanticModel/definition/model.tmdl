@@ -1,9 +1,21 @@
-model
-{
-  culture: "en-US"
-  tables: {
-  
-    ref table Orders
-    ref table People
-    ref table Returned}
-}
+model Model
+	culture: en-US
+	defaultPowerBIDataSourceVersion: powerBI_V3
+	sourceQueryCulture: en-US
+	dataAccessOptions
+		legacyRedirects
+		returnErrorValuesAsNull
+
+annotation PBI_QueryOrder = ['Orders', 'People', 'Returned']
+
+annotation __PBI_TimeIntelligenceEnabled = 1
+
+annotation PBIDesktopVersion = 2.137.1102.0 (24.10)
+
+annotation PBI_ProTooling = ["DevMode"]
+
+ref table Orders
+ref table People
+ref table Returned
+
+ref cultureInfo en-US

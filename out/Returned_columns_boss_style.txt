@@ -1,8 +1,8 @@
-- name: "Order_ID (Returned)"
+- name: Order_ID (Returned)
   dataType: string
   summarizeBy: none
-  sourceColumn: "Order_ID (Returned)"
-- name: "Returned"
+  sourceColumn: Order_ID (Returned)
+- name: Returned
   dataType: string
   summarizeBy: none
-  sourceColumn: "Returned"
+  sourceColumn: Returned
