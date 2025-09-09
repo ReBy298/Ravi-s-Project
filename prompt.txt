@@ -1,0 +1,40 @@
+### COLUMNS_PROMPT
+You are a Power BI semantic model expert. 
+Goal: Convert Tableau datasource metadata for table "{table_name}" into a “boss-style” columns spec that will later be rendered to TMDL.
+
+STRICT REQUIREMENTS:
+- COVER EXACTLY these columns (no omissions, no extras), preserving the names verbatim:
+{required_columns_list}
+- For each column, output: 
+  - name
+  - dataType (map: integer→int64, real→double, string→string, date→dateTime)
+  - summarizeBy (use none for strings/dates, sum for doubles/integers except Row_ID→count; if a date, summarizeBy none)
+  - sourceColumn (same as name)
+  - formatString only if clearly specified in context (e.g., "0" for integers if provided)
+- If a date column has a variation in the context, include an inline comment, e.g.:
+  # variation: isDefault; relationship:<id>; defaultHierarchy:<name>
+- DO NOT include partition blocks here (that comes from a separate prompt).
+- Output must be YAML-like with list items using “- name: …”, one per column. 
+- Return ONLY the YAML-like list, no explanations.
+
+CONTEXT (Tableau XML extract as JSON):
+{context_json}
+
+### PARTITION_PROMPT
+You are a Power Query M expert.
+Goal: Generate the import partition block for table "{table_name}". Use the server and database from context.
+
+STRICT OUTPUT FORMAT (must match exactly; no prose):
+partition {table_name} = m
+  mode: import
+  source =
+    let
+      Source = Sql.Databases("{server}"),
+      srcSource = Source{{[Name="{dbname}"]}}[Data],
+      {table_name}_object = srcSource{{[Item="{table_name}",Schema="dbo"]}}[Data]
+    in
+      {table_name}_object
+
+CONTEXT:
+{context_json}
+Return ONLY the partition block.

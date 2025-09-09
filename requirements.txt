@@ -1,0 +1,16 @@
+# ==== Core ====
+openai>=1.46.0
+pyyaml>=6.0.1
+
+# ==== Optional ====
+# lxml>=5.2.1       # More robust XML parsing than the stdlib (optional)
+
+# ==== Legacy/compat (from your repo) ====
+numpy
+pandas
+python-dateutil
+pytz
+six
+tzdata
+requests
+pyodbc              # On macOS, may require ODBC drivers; comment out if not needed
