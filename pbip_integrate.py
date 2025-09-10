@@ -326,8 +326,8 @@ def render_relationships_tmdl(rels: List[Dict[str, str]]) -> str:
         name = f"{lt}_{lc}__{rt}_{rc}"
         lines.append(f"  relationship '{name}'")
         lines.append("  {")
-        lines.append(f"    fromColumn: {_fmt_ident(lt)}[{lc}]")
-        lines.append(f"    toColumn: {_fmt_ident(rt)}[{rc}]")
+        lines.append(f"    fromColumn: {_fmt_ident(lt)}.'{lc}'")
+        lines.append(f"    toColumn: {_fmt_ident(rt)}.'{rc}'")
         lines.append("    crossFilteringBehavior: oneDirection")
         lines.append("  }")
     lines.append("}")

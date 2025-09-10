@@ -2,14 +2,14 @@ relationships
 {
   relationship 'Orders_Region__People_Region (People)'
   {
-    fromColumn: Orders[Region]
-    toColumn: People[Region (People)]
+    fromColumn: Orders.'Region'
+    toColumn: People.'Region (People)'
     crossFilteringBehavior: oneDirection
   }
   relationship 'Orders_Order_ID__Returned_Order_ID (Returned)'
   {
-    fromColumn: Orders[Order_ID]
-    toColumn: Returned[Order_ID (Returned)]
+    fromColumn: Orders.'Order_ID'
+    toColumn: Returned.'Order_ID (Returned)'
     crossFilteringBehavior: oneDirection
   }
 }

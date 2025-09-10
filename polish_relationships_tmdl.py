@@ -61,7 +61,9 @@ def norm_col(s: str) -> str:
 
 def rewrite_block(block: str, from_norm: str, to_norm: str) -> str:
     def fmt(x: str) -> str:
-        t, c = x.split(".", 1); return f"{t}.{c}"
+        t, c = x.split(".", 1)
+        c = c.strip("'\"")  
+        return f"{t}.'{c}'"
     block = re.sub(r"(?m)^\s*fromColumn:\s*.*$", f"  fromColumn: {fmt(from_norm)}", block)
     block = re.sub(r"(?m)^\s*toColumn:\s*.*$",   f"  toColumn: {fmt(to_norm)}",   block)
     block = re.sub(r"(?m)^\s*crossFilteringBehavior:\s*.*$", "  crossFilteringBehavior: oneDirection", block)
