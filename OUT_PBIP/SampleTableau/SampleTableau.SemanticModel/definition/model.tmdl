@@ -14,6 +14,8 @@ annotation PBIDesktopVersion = 2.137.1102.0 (24.10)
 
 annotation PBI_ProTooling = ["DevMode"]
 
-@@reftable@@
+ref table Orders
+ref table People
+ref table Returned
 
 ref cultureInfo en-US
