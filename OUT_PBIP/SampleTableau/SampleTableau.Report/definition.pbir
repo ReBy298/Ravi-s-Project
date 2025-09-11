@@ -2,7 +2,7 @@
   "version": "4.0",
   "datasetReference": {
     "byPath": {
-      "path": "../@@.SemanticModel@@"
+      "path": "../SampleTableau.SemanticModel/definition"
     },
     "byConnection": null
   }
