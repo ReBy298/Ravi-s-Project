@@ -1,116 +1,184 @@
 #!/usr/bin/env python3
-# polish_relationships_tmdl.py (final-final)
-
-import argparse, re
+# polish_relationships_tmdl.py
+import argparse
+import re
 from pathlib import Path
+from typing import List, Tuple, Dict, Optional
 
-BLOCK_START = re.compile(r"^\s*relationship\b", re.IGNORECASE)
-FROM_LINE   = re.compile(r"^\s*fromColumn:\s*(.+)$", re.IGNORECASE)
-TO_LINE     = re.compile(r"^\s*toColumn:\s*(.+)$", re.IGNORECASE)
-WRAPPER_LINE= re.compile(r"^\s*relationships\s*:?\s*$", re.IGNORECASE)
-REL_NAME_QUOTED = re.compile(r"^(\s*relationship)\s+'([^']+)'\s*", re.IGNORECASE)
-REL_HEADER      = re.compile(r"^(\s*relationship\s+)(.+)$", re.IGNORECASE)
-SUFFIX_PAREN    = re.compile(r"\s*\([^)]*\)\s*$")
+REL_FILE = "relationships.tmdl"
 
-def strip_wrapper_and_fix_headers(text: str) -> str:
-    lines = text.splitlines()
-    while lines and not lines[0].strip():
-        lines.pop(0)
-    if lines and WRAPPER_LINE.match(lines[0]):
-        lines.pop(0)
-        if lines and not lines[0].strip():
-            lines.pop(0)
-    for i, ln in enumerate(lines):
-        m = REL_NAME_QUOTED.match(ln)
+REL_START_RE = re.compile(r"^\s*relationship\s+(?P<name>[^\s].*)\s*$")
+FROM_RE = re.compile(r"^\s*fromColumn:\s+(?P<table>[A-Za-z0-9_]+)\.\'(?P<col>.+)\'\s*$")
+TO_RE   = re.compile(r"^\s*toColumn:\s+(?P<table>[A-Za-z0-9_]+)\.\'(?P<col>.+)\'\s*$")
+XFB_RE  = re.compile(r"^\s*crossFilteringBehavior:\s+(?P<xfb>\S+)\s*$")
+
+def _strip_table_suffix(col: str, table: str) -> str:
+    """
+    Normalize column names that may carry '(Table)' suffix (with optional spaces).
+    Examples:
+      Region(People)     -> Region
+      Region (People)    -> Region
+    """
+    col = (col or "").strip().strip("'").strip('"')
+    m = re.match(r"^(.*?)[ ]*\(([^\)]+)\)$", col)
+    if m and m.group(2).strip().lower() == (table or "").strip().lower():
+        return m.group(1).strip()
+    return col
+
+def _parse_keep_list(keep_arg: Optional[str]) -> List[Tuple[str, str, str, str]]:
+    """
+    --keep accepts comma-separated entries like:
+      "Orders.Region=People.Region,Orders.Order_ID=Returned.Order_ID"
+    We also allow 'Region(People)' forms and normalize them away.
+    Returns list of (lt, lc_norm, rt, rc_norm).
+    """
+    if not keep_arg:
+        return []
+    parts = [p.strip() for p in keep_arg.split(",") if p.strip()]
+    keep = []
+    for part in parts:
+        if "=" not in part or "." not in part:
+            continue
+        left, right = part.split("=", 1)
+        lt, lc = left.split(".", 1)
+        rt, rc = right.split(".", 1)
+        lc = _strip_table_suffix(lc, lt)
+        rc = _strip_table_suffix(rc, rt)
+        keep.append((lt.strip(), lc, rt.strip(), rc))
+    return keep
+
+def _read_relationships(path: Path) -> List[Dict[str, str]]:
+    """
+    Very small TMDL reader for relationship blocks we emit.
+    """
+    if not path.exists():
+        return []
+
+    rows = path.read_text(encoding="utf-8").splitlines()
+    rels: List[Dict[str, str]] = []
+    cur: Dict[str, str] = {}
+    in_block = False
+
+    for line in rows:
+        m = REL_START_RE.match(line)
         if m:
-            ln = f"{m.group(1)} {m.group(2)}"
-        m2 = REL_HEADER.match(ln)
-        if m2:
-            prefix, name = m2.group(1), m2.group(2)
-            name = re.sub(r"\s+\(", "(", name)  # remove space before '('
-            ln = prefix + name
-        lines[i] = ln
-    return "\n".join(lines)
+            if in_block and cur:
+                rels.append(cur)
+            cur = {"name": m.group("name")}
+            in_block = True
+            continue
 
-def parse_blocks(text: str):
-    lines = text.splitlines()
-    i, n = 0, len(lines)
-    while i < n:
-        if not BLOCK_START.match(lines[i]):
-            i += 1; continue
-        start = i; i += 1
-        while i < n and not BLOCK_START.match(lines[i]):
-            i += 1
-        block = "\n".join(lines[start:i]).strip() + "\n"
-        from_col = to_col = ""
-        for ln in block.splitlines():
-            mf = FROM_LINE.match(ln);  mt = TO_LINE.match(ln)
-            if mf: from_col = mf.group(1).strip()
-            if mt: to_col   = mt.group(1).strip()
-        yield block, from_col, to_col
+        if not in_block:
+            continue
 
-def norm_col(s: str) -> str:
-    s = s.strip()
-    s = SUFFIX_PAREN.sub("", s)
-    if "[" in s and "]" in s:
-        table = s.split("[",1)[0].strip()
-        col   = s.split("[",1)[1].split("]",1)[0].strip()
-        col   = SUFFIX_PAREN.sub("", col)
-        return f"{table}.{col}"
-    return SUFFIX_PAREN.sub("", s.replace(" ", ""))
+        m = FROM_RE.match(line)
+        if m:
+            cur["from_table"] = m.group("table")
+            cur["from_column_raw"] = m.group("col")
+            continue
 
-def rewrite_block(block: str, from_norm: str, to_norm: str) -> str:
-    def fmt(x: str) -> str:
-        t, c = x.split(".", 1)
-        c = c.strip("'\"")  
-        return f"{t}.'{c}'"
-    block = re.sub(r"(?m)^\s*fromColumn:\s*.*$", f"  fromColumn: {fmt(from_norm)}", block)
-    block = re.sub(r"(?m)^\s*toColumn:\s*.*$",   f"  toColumn: {fmt(to_norm)}",   block)
-    block = re.sub(r"(?m)^\s*crossFilteringBehavior:\s*.*$", "  crossFilteringBehavior: oneDirection", block)
-    return block
+        m = TO_RE.match(line)
+        if m:
+            cur["to_table"] = m.group("table")
+            cur["to_column_raw"] = m.group("col")
+            continue
+
+        m = XFB_RE.match(line)
+        if m:
+            cur["crossFilteringBehavior"] = m.group("xfb")
+            continue
+
+        # blank or unrelated lines end the block (when we hit a new relationship, handled above)
+
+    if in_block and cur:
+        rels.append(cur)
+
+    # Normalize column names now
+    for r in rels:
+        lt = r.get("from_table") or ""
+        rt = r.get("to_table") or ""
+        r["from_column"] = _strip_table_suffix(r.get("from_column_raw", ""), lt)
+        r["to_column"]   = _strip_table_suffix(r.get("to_column_raw", ""), rt)
+
+    return rels
+
+def _write_relationships(path: Path, rels: List[Dict[str, str]]) -> None:
+    lines: List[str] = []
+    for r in rels:
+        name = r.get("name", "relationship")
+        lt   = r.get("from_table")
+        lc   = r.get("from_column")
+        rt   = r.get("to_table")
+        rc   = r.get("to_column")
+        xfb  = r.get("crossFilteringBehavior")
+
+        if not (lt and lc and rt and rc):
+            continue
+
+        lines.append(f"relationship {name}")
+        lines.append(f"  fromColumn: {lt}.'{lc}'")
+        lines.append(f"  toColumn: {rt}.'{rc}'")
+        if xfb:
+            lines.append(f"  crossFilteringBehavior: {xfb}")
+        lines.append("")  # blank line
+
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+def _should_drop_local_date_table(rel: Dict[str, str]) -> bool:
+    # drop relationships that involve LocalDateTable_*
+    lt = (rel.get("from_table") or "").lower()
+    rt = (rel.get("to_table") or "").lower()
+    return lt.startswith("localdatetable_") or rt.startswith("localdatetable_")
 
 def main():
-    ap = argparse.ArgumentParser("Polish relationships.tmdl (exact header + indent)")
-    ap.add_argument("--definition-dir", required=True)
-    ap.add_argument("--keep", default="", help='Comma list: "Table.Col=Table.Col"')
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--definition-dir", required=True, help=".../SemanticModel/definition")
+    ap.add_argument("--keep", default="", help="Comma-separated keep list: A.Col=B.Col, ...")
     ap.add_argument("--drop-localdatetable", action="store_true")
     args = ap.parse_args()
 
-    rel_path = Path(args.definition_dir) / "relationships.tmdl"
-    if not rel_path.exists():
-        raise SystemExit(f"Not found: {rel_path}")
+    rel_path = Path(args.definition_dir) / REL_FILE
+    rels = _read_relationships(rel_path)
 
-    wanted = set()
-    if args.keep.strip():
-        for item in args.keep.split(","):
-            if "=" in item:
-                a, b = item.split("=", 1)
-                a, b = norm_col(a), norm_col(b)
-                wanted.add((a, b)); wanted.add((b, a))
+    # Normalize & filter
+    keep_pairs = _parse_keep_list(args.keep)
+    keep_set = {f"{lt}.{lc}={rt}.{rc}" for (lt, lc, rt, rc) in keep_pairs}
 
-    raw = rel_path.read_text(encoding="utf-8")
-    raw = strip_wrapper_and_fix_headers(raw)
+    filtered: List[Dict[str, str]] = []
+    for r in rels:
+        if args.drop_localdatetable and _should_drop_local_date_table(r):
+            continue
 
-    detected, out, kept = [], [], []
-    for block, fraw, traw in parse_blocks(raw):
-        f, t = norm_col(fraw), norm_col(traw)
-        detected.append((f, t))
-        keep = True
-        if wanted: keep = (f, t) in wanted
-        if args.drop_localdatetable and ("LocalDateTable" in f or "LocalDateTable" in t):
-            keep = False
-        if keep:
-            out.append(rewrite_block(block.strip(), f, t))
-            kept.append((f, t))
+        # Build normalized key for matching
+        lt = r.get("from_table") or ""
+        lc = r.get("from_column") or ""
+        rt = r.get("to_table") or ""
+        rc = r.get("to_column") or ""
+        key = f"{lt}.{lc}={rt}.{rc}"
 
-    if not out:
+        if keep_set:
+            # keep only those explicitly allowed
+            if key in keep_set:
+                filtered.append(r)
+        else:
+            # keep everything (minus LocalDateTable if requested)
+            filtered.append(r)
+
+    if keep_set and not filtered:
+        # Show what we detected to help caller adjust --keep
+        detected = []
+        for r in rels:
+            lt = r.get("from_table") or ""
+            lc = r.get("from_column") or ""
+            rt = r.get("to_table") or ""
+            rc = r.get("to_column") or ""
+            detected.append(f"{lt}.'{lc}' = {rt}.'{rc}'")
         print("[ERROR] All relationships would be removed. Detected:")
-        for a,b in detected: print(" ", a, "=", b)
+        for d in detected:
+            print(f"  {d}")
         raise SystemExit(1)
 
-    rel_path.write_text("\n\n".join(out) + "\n", encoding="utf-8")
-    print("✅ relationships.tmdl polished")
-    for a,b in kept: print(f"  - {a} -> {b}")
+    _write_relationships(rel_path, filtered)
 
 if __name__ == "__main__":
     main()

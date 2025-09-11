@@ -1,24 +1,14 @@
 #!/usr/bin/env python3
 """
 pbip_integrate.py
------------------
-Integrate AI-generated artifacts into a PBIP project.
 
-What it does for a given table:
-1) Copies the PBIP template to an output PBIP folder (if output doesn't exist).
-   - If the template path is a directory, it copies it.
-   - If it's a file or not a directory, it scaffolds a minimal PBIP project.
-2) Reads your columns spec (boss-style YAML-like list or pre-rendered TMDL columns)
-   and renders a proper TMDL table file at:
-      <pbip_out>/SemanticModel/definition/tables/<Table>.tmdl
-3) Wraps the provided Power Query M partition block into a TMDL `partitions { ... }`
-   and appends it under the table definition.
-4) Ensures `ref table '<Table>'` exists in `model.tmdl`.
-5) Regenerates a simple `relationships.tmdl` from the Tableau XML:
-   maps object-ids -> captions and expressions -> columns to build
-   (fromTable[col]) -> (toTable[col]) relationships.
+Integrate a single table into a PBIP (TMDL) model:
+- Creates/updates OUT_PBIP/<Name>.pbip/SemanticModel/definition/tables/<Table>.tmdl
+- Ensures model.tmdl & relationships.tmdl exist
+- Emits relationships in TMDL using Table.'Column'
+- Normalizes columns like "Region(People)" -> "Region" before emitting
 
-USAGE:
+Usage example:
   python pbip_integrate.py \
     --xml /path/to/datasource_demo_tableau.xml \
     --pbip-template /path/to/PBIPTemplate.pbip \
@@ -27,362 +17,338 @@ USAGE:
     --columns-file /path/to/out/Orders_columns_boss_style.txt \
     --partition-file /path/to/out/Orders_partition.m
 """
+
 import argparse
+import csv
 import os
 import re
 import shutil
-import sys
-import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Optional, Tuple, Dict
 
 # --------------------------
-# Optional YAML dependency
+# Helpers
 # --------------------------
-try:
-    import yaml  # type: ignore
-except Exception:
-    yaml = None
 
-# --------------------------
-# Helpers: filesystem
-# --------------------------
-def ensure_pbip_scaffold(pbip_out: Path):
-    """Create a minimal PBIP scaffold if it doesn't exist."""
-    (pbip_out / "SemanticModel" / "definition" / "tables").mkdir(parents=True, exist_ok=True)
-    model = pbip_out / "SemanticModel" / "definition" / "model.tmdl"
-    if not model.exists():
-        model.write_text(
-            "model\n"
-            "{\n"
-            '  culture: "en-US"\n'
-            "  tables: {\n"
-            "  }\n"
-            "}\n", encoding="utf-8"
-        )
-    rels = pbip_out / "SemanticModel" / "definition" / "relationships.tmdl"
-    if not rels.exists():
-        rels.write_text(
-            "relationships\n"
-            "{\n"
-            "}\n", encoding="utf-8"
-        )
+def _find_sem_model_dir(pbip_out_dir: Path) -> Path:
+    """
+    Return the semantic model root inside the copied template.
+    Prefer placeholder dirs shipped in the template (smtemplate.SemanticModel),
+    otherwise use 'SemanticModel' (create it if missing).
+    """
+    for name in ("smtemplate.SemanticModel", "SemanticModel", "template.SemanticModel"):
+        cand = pbip_out_dir / name
+        if cand.exists() and cand.is_dir():
+            return cand
+    # nothing found → create canonical path
+    cand = pbip_out_dir / "SemanticModel"
+    cand.mkdir(parents=True, exist_ok=True)
+    return cand
 
-def copy_pbip_template_if_needed(template: Path, pbip_out: Path):
-    """Copy PBIP template folder to pbip_out if pbip_out doesn't exist."""
-    if pbip_out.exists():
+def _strip_table_suffix(col: str, table: str) -> str:
+    """
+    Normalize column names that carry a trailing '(Table)' suffix.
+    Example: 'Region(People)' or 'Region (People)' -> 'Region' when table == 'People'.
+    """
+    col = (col or "").strip().strip("'").strip('"')
+    m = re.match(r"^(.*?)[ ]*\(([^\)]+)\)$", col)
+    if m and m.group(2).strip().lower() == (table or "").strip().lower():
+        return m.group(1).strip()
+    return col
+
+def _fmt_table_ident(table_name: str) -> str:
+    """Return table identifier as it should appear in TMDL (adjust if you ever need quoting)."""
+    return table_name
+
+def _ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
+
+def _copy_template_if_missing(template_input: Path, pbip_out_dir: Path) -> None:
+    """
+    Accept either:
+      - template_input = /path/to/pbip_template          (directory), or
+      - template_input = /path/to/pbip_template/Name.pbip (file in that directory)
+
+    If the output dir doesn't exist, copy the whole template directory tree there.
+    """
+    template_dir = template_input
+    if template_dir.is_file():
+        # If they gave us /path/.../PBIPTemplate.pbip, use its parent folder.
+        template_dir = template_dir.parent
+
+    if not template_dir.exists() or not template_dir.is_dir():
+        raise FileNotFoundError(f"PBIP template directory not found: {template_input}")
+
+    if pbip_out_dir.exists():
+        # Already scaffolded for this run; nothing to do
         return
-    if template.exists() and template.is_dir():
-        shutil.copytree(template, pbip_out)
-        # Make sure the essential folders exist even if template lacked them
-        ensure_pbip_scaffold(pbip_out)
-    else:
-        # Template is not a directory → scaffold minimal PBIP
-        ensure_pbip_scaffold(pbip_out)
 
-# --------------------------
-# Boss-style columns parsing
-# --------------------------
-def load_columns_from_boss_style(path: Path) -> List[Dict[str, Any]]:
-    """
-    Reads a boss-style YAML-like list:
-      - name: Row_ID
-        dataType: int64
-        summarizeBy: count
-        sourceColumn: Row_ID
-        formatString: "0"
-    Returns a list of dicts.
-    """
-    text = path.read_text(encoding="utf-8").strip()
-    # Heuristic: if looks like TMDL already (starts with "table" or "column"), return a sentinel
-    if re.match(r"^\s*(table|column|columns\s*\{)", text, flags=re.I):
-        return [{"__TMDL_RAW__": text}]
+    shutil.copytree(template_dir, pbip_out_dir)
 
-    if yaml is None:
-        raise RuntimeError(
-            f"File '{path}' looks like YAML boss-style, but PyYAML is not installed.\n"
-            "Install it with:  python -m pip install pyyaml"
-        )
-    data = yaml.safe_load(text)
-    if not isinstance(data, list):
-        raise ValueError("Boss-style columns file must be a YAML list of columns.")
-    out: List[Dict[str, Any]] = []
-    for item in data:
-        if not isinstance(item, dict) or "name" not in item:
+
+def _read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+def _write_text(path: Path, text: str) -> None:
+    path.write_text(text, encoding="utf-8")
+
+def _indent_block(text: str, spaces: int) -> str:
+    pad = " " * spaces
+    return "\n".join(pad + line if line.strip() else line for line in text.splitlines())
+
+def _looks_like_tmdl_columns_block(text: str) -> bool:
+    # Heuristic: if it already contains "column <name>" lines, treat as TMDL-ready
+    return bool(re.search(r"(?m)^\s*column\s+[A-Za-z0-9_]+", text))
+
+def _parse_simple_columns_rows(text: str) -> List[Tuple[str, str, Optional[str]]]:
+    """
+    Parse very simple inputs like:
+      Row_ID,int64,count
+      Discount,double,sum
+      Customer_ID,string,none
+    or "name | type | summarize"
+    Returns list of (name, type, summarizeBy or None)
+    """
+    out: List[Tuple[str, str, Optional[str]]] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
             continue
-        out.append(item)
-    if not out:
-        raise ValueError("No columns parsed from boss-style file.")
+        # split by comma or pipe
+        if "," in line:
+            parts = [p.strip() for p in line.split(",")]
+        elif "|" in line:
+            parts = [p.strip() for p in line.split("|")]
+        else:
+            # fallback: if it's just a name, default string/none
+            parts = [line]
+
+        name = parts[0]
+        dtype = (parts[1] if len(parts) > 1 else "string").lower()
+        agg = parts[2] if len(parts) > 2 else None
+        # normalize a few common dtype aliases
+        if dtype in ("integer", "int", "int64", "long"):
+            dtype = "int64"
+        elif dtype in ("double", "real", "float", "decimal"):
+            dtype = "double"
+        elif dtype in ("datetime", "date", "timestamp"):
+            dtype = "dateTime"
+        else:
+            dtype = "string"
+        out.append((name, dtype, agg))
     return out
 
-# --------------------------
-# TMDL rendering
-# --------------------------
-def _fmt_ident(name: str) -> str:
-    """Format identifiers safely; add single quotes if they contain spaces or special chars."""
-    if re.search(r"[^\w]", name):
-        return f"'{name}'"
-    return name
-
-def render_columns_tmdl_block(columns: List[Dict[str, Any]]) -> str:
+def _render_columns_from_rows(rows: List[Tuple[str, str, Optional[str]]]) -> str:
     """
-    Render a TMDL columns block from boss-style columns list.
-    If the list contains a single dict with __TMDL_RAW__, returns that raw content
-    (assuming it's already valid TMDL snippet for columns).
+    Render TMDL column blocks from parsed rows.
     """
-    if len(columns) == 1 and "__TMDL_RAW__" in columns[0]:
-        raw = columns[0]["__TMDL_RAW__"]
-        # If raw is a full table file, caller will embed it differently.
-        # If raw contains "column " entries, we just return it.
-        return str(raw).strip()
-
     lines: List[str] = []
-    lines.append("  columns {")
-    for col in columns:
-        name = str(col.get("name", "")).strip()
-        if not name:
-            continue
-        dt = str(col.get("dataType", "string")).strip()
-        summ = str(col.get("summarizeBy", "") or "").strip()
-        src = str(col.get("sourceColumn", name)).strip()
-        fmt = col.get("formatString", None)
-        lines.append(f"    column {_fmt_ident(name)}")
-        lines.append("    {")
-        lines.append(f"      dataType: {dt}")
-        if summ and summ.lower() != "none":
-            lines.append(f"      summarizeBy: {summ}")
-        lines.append(f"      sourceColumn: {_fmt_ident(src)}")
-        if fmt is not None and str(fmt).strip() != "":
-            # if it's purely digits, no quotes; else quote
-            fmt_str = str(fmt)
-            if re.fullmatch(r"\d+", fmt_str):
-                lines.append(f"      formatString: {fmt_str}")
-            else:
-                lines.append(f'      formatString: "{fmt_str}"')
-        lines.append("    }")
-    lines.append("  }")
+    for name, dtype, agg in rows:
+        lines.append(f"  column {name}")
+        lines.append(f"    dataType: {dtype}")
+        if agg and agg.lower() not in ("none", "default"):
+            lines.append(f"    summarizeBy: {agg}")
+        lines.append(f"    sourceColumn: {name}")
     return "\n".join(lines)
 
-def render_partition_block_tmdl(partition_text: str, table: str) -> str:
+def _load_columns_block(columns_file: Path) -> str:
     """
-    Wrap the provided 'partition <table> = m ...' into:
-      partitions {
-        partition <table> = m
-          ...
-      }
+    Load columns spec; if it's already TMDL 'column ...' blocks, return as-is.
+    Otherwise, treat as a simple CSV-like list and render.
     """
-    body = partition_text.strip()
-    # Normalize indentation to 2 spaces inside partitions { ... }
-    indented = []
-    for ln in body.splitlines():
-        indented.append("  " + ln.rstrip())
-    return "  partitions {\n" + "\n".join(indented) + "\n  }"
+    raw = _read_text(columns_file)
+    if _looks_like_tmdl_columns_block(raw):
+        # Clean up any top-level 'table' wrapper if the file accidentally contains it
+        if raw.lstrip().startswith("table "):
+            # Extract only the 'column ...' blocks
+            cols = re.findall(r"(?ms)(^\s*column\s+.*?(?=^\s*(?:column\s+|partition\s+|annotation\s+|$)))", raw)
+            return "\n".join(c.rstrip() for c in cols)
+        return raw.strip()
+    # Parse simple rows
+    rows = _parse_simple_columns_rows(raw)
+    return _render_columns_from_rows(rows)
 
-def render_table_tmdl(table: str, columns_block_or_list, partition_text: str) -> str:
-    """Render a full table TMDL file."""
-    # If columns list is a raw TMDL (single dict __TMDL_RAW__), drop into place
-    if isinstance(columns_block_or_list, list) and len(columns_block_or_list) == 1 and "__TMDL_RAW__" in columns_block_or_list[0]:
-        # Is this a full table or only "column" entries?
-        raw = columns_block_or_list[0]["__TMDL_RAW__"].strip()
-        if re.search(r"^\s*table\s", raw, flags=re.I):
-            # Already a full table file, but we still need to append partitions
-            core = raw.rstrip()
-            parts_block = render_partition_block_tmdl(partition_text, table)
-            # If raw already has partitions, you may want to replace them; here we just append
-            return core + "\n" + parts_block + "\n"
-        else:
-            # It's a columns-only snippet → wrap into a full table
-            cols_block_text = raw
+def _wrap_partition_block(table: str, m_text: str) -> str:
+    """
+    Take a raw M block (let...in...) and wrap as TMDL partition with canonical indentation.
+    Also ensure single braces (sometimes LLMs print '{{' / '}}').
+    """
+    m_text = m_text.replace("{{", "{").replace("}}", "}")
+
+    # Trim and indent the M lines under "source ="
+    m_text = m_text.strip("\n")
+    # canonical 2/4/6 indentation pattern:
+    #   partition <T> = m
+    #     mode: import
+    #     source =
+    #       let
+    #         ...
+    #       in
+    #         Return
+    lines = []
+    lines.append(f"  partition {table} = m")
+    lines.append(f"    mode: import")
+    lines.append(f"    source =")
+    # if user-supplied block includes its own 'let', reindent; otherwise trust it
+    # We force 6 spaces for 'let' / 'in' and 8 for body
+    # Attempt a lightweight normalization:
+    # Put a newline before 'in' to ensure we can indent the return nicely
+    m_text_norm = re.sub(r"\n\s*in\s*\n", "\n      in\n", m_text, flags=re.IGNORECASE)
+    if not re.search(r"(?m)^\s*let\s*$", m_text_norm):
+        # If it doesn't seem to contain a line with exactly 'let', just indent raw
+        lines.append(_indent_block(m_text_norm, 6))
     else:
-        cols_block_text = render_columns_tmdl_block(columns_block_or_list)
+        # Reindent line-by-line:
+        out_m = []
+        for raw in m_text_norm.splitlines():
+            s = raw.strip()
+            if not s:
+                continue
+            if s.lower() == "let":
+                out_m.append("      let")
+            elif s.lower() == "in":
+                out_m.append("      in")
+            else:
+                out_m.append("        " + s)
+        lines.extend(out_m)
+    return "\n".join(lines)
 
-    parts_block = render_partition_block_tmdl(partition_text, table)
-
-    lines: List[str] = []
-    lines.append(f"table {_fmt_ident(table)}")
-    lines.append("{")
-    lines.append(cols_block_text)
-    lines.append(parts_block)
-    lines.append("}")
-    return "\n".join(lines) + "\n"
-
-# --------------------------
-# Model.tmdl update
-# --------------------------
-def ensure_ref_table(model_path: Path, table: str):
-    """
-    Ensure model.tmdl contains:
-      model { ... tables: { ref table '<Table>' } }
-    """
+def _ensure_model_file(model_path: Path) -> None:
     if not model_path.exists():
-        model_path.parent.mkdir(parents=True, exist_ok=True)
-        model_path.write_text(
-            "model\n{\n  culture: \"en-US\"\n  tables: {\n  }\n}\n", encoding="utf-8"
-        )
+        _write_text(model_path, "model\n")
 
-    text = model_path.read_text(encoding="utf-8")
-    ref_line = f"ref table {_fmt_ident(table)}"
-    if ref_line in text:
-        return
+def _ensure_relationships_file(rel_path: Path) -> None:
+    if not rel_path.exists():
+        _write_text(rel_path, "")
 
-    # Find or create tables block
-    m = re.search(r"(tables\s*:\s*\{\s*)(.*?)(\s*\})", text, flags=re.S)
-    if m:
-        start, body, end = m.groups()
-        new_body = (body + f"\n    {ref_line}").rstrip()
-        new_text = text[:m.start(1)] + start + new_body + end + text[m.end(3):]
-        model_path.write_text(new_text, encoding="utf-8")
-    else:
-        # inject a basic tables block near the top of model
-        new_text = re.sub(
-            r"model\s*\{",
-            "model\n{\n  tables: {\n    " + ref_line + "\n  }",
-            text,
-            count=1,
-            flags=re.S,
-        )
-        if new_text == text:
-            # fallback: overwrite with a minimal model including the ref
-            new_text = (
-                "model\n{\n"
-                '  culture: "en-US"\n'
-                "  tables: {\n"
-                f"    {ref_line}\n"
-                "  }\n"
-                "}\n"
-            )
-        model_path.write_text(new_text, encoding="utf-8")
+def _read_existing_tables(tables_dir: Path) -> List[str]:
+    names = []
+    if tables_dir.exists():
+        for p in tables_dir.glob("*.tmdl"):
+            names.append(p.stem)
+    return names
+
+def _append_or_update_relationships(rel_path: Path, rels: List[Tuple[str,str,str,str]], behavior: Optional[str] = None) -> None:
+    """
+    rels: list of (left_table, left_col, right_table, right_col)
+    Emits TMDL blocks; normalizes col suffixes.
+    """
+    existing = _read_text(rel_path) if rel_path.exists() else ""
+    blocks: List[str] = []
+    if existing.strip():
+        blocks.append(existing.rstrip() + "\n")
+
+    for (lt, lc, rt, rc) in rels:
+        lc_n = _strip_table_suffix(lc, lt)
+        rc_n = _strip_table_suffix(rc, rt)
+        name = f"{lt}_{lc_n}_{rt}_{rc_n}"
+        blocks.append(f"relationship {name}")
+        blocks.append(f"  fromColumn: {_fmt_table_ident(lt)}.'{lc_n}'")
+        blocks.append(f"  toColumn: {_fmt_table_ident(rt)}.'{rc_n}'")
+        if behavior:
+            blocks.append(f"  crossFilteringBehavior: {behavior}")
+        blocks.append("")  # blank line
+
+    _write_text(rel_path, "\n".join(blocks).rstrip() + "\n")
 
 # --------------------------
-# Relationships from Tableau XML
+# Core integrate
 # --------------------------
-def parse_relationships_from_xml(xml_path: Path) -> List[Dict[str, str]]:
-    """
-    Read <object-graph><objects> to map id -> caption (table),
-    and <relationships> to obtain pairs (table.col) = (table.col).
-    Returns list of dicts: {left_table,left_column,right_table,right_column}
-    """
-    tree = ET.parse(str(xml_path))
-    root = tree.getroot()
 
-    id2cap: Dict[str, str] = {}
-    for obj in root.findall(".//object-graph/objects/object"):
-        obj_id = obj.attrib.get("id")
-        cap = obj.attrib.get("caption")
-        if obj_id and cap:
-            id2cap[obj_id] = cap
+def integrate_table(xml_path: Path,
+                    template_dir: Path,
+                    pbip_out_dir: Path,
+                    table_name: str,
+                    columns_file: Path,
+                    partition_file: Path) -> None:
+    # 0) Ensure OUT PBIP exists (copy template if needed)
+    _copy_template_if_missing(template_dir, pbip_out_dir)
 
-    rels_out: List[Dict[str, str]] = []
-    for rel in root.findall(".//object-graph/relationships/relationship"):
-        eq = rel.find("./expression[@op='=']")
-        if eq is None:
-            continue
-        parts = eq.findall("./expression")
-        if len(parts) != 2:
-            continue
+    # 1) Paths
+    sem_model_dir = _find_sem_model_dir(pbip_out_dir)
+    def_dir = sem_model_dir / "definition"
+    tables_dir = def_dir / "tables"
+    model_path = def_dir / "model.tmdl"
+    rel_path = def_dir / "relationships.tmdl"
+    table_tmdl = tables_dir / f"{table_name}.tmdl"
 
-        # columns in expressions (e.g., "[Region]")
-        def _col(op_node):
-            col = op_node.attrib.get("op") if op_node is not None else None
-            return (col or "").strip("[]")
+    _ensure_dir(tables_dir)
+    _ensure_model_file(model_path)
+    _ensure_relationships_file(rel_path)
 
-        left_col = _col(parts[0])
-        right_col = _col(parts[1])
+    # 2) Build TMDL for the table
+    cols_block = _load_columns_block(columns_file)
+    m_raw = _read_text(partition_file)
 
-        left_ep = rel.find("./first-end-point")
-        right_ep = rel.find("./second-end-point")
-        left_tab = id2cap.get(left_ep.attrib.get("object-id")) if left_ep is not None else None
-        right_tab = id2cap.get(right_ep.attrib.get("object-id")) if right_ep is not None else None
-        if not left_tab or not right_tab or not left_col or not right_col:
-            continue
+    # Compose the table file
+    parts: List[str] = []
+    parts.append(f"table {table_name}")
+    # columns (already indented or we indent if needed)
+    if not cols_block.startswith("  "):
+        cols_block = _indent_block(cols_block, 2)
+    parts.append(cols_block)
+    # partition block (wrapped)
+    parts.append(_wrap_partition_block(table_name, m_raw))
+    # annotation (Power BI likes this)
+    parts.append("  annotation PBI_ResultType = Table")
 
-        rels_out.append({
-            "left_table": left_tab,
-            "left_column": left_col,
-            "right_table": right_tab,
-            "right_column": right_col,
-        })
+    tmdl_text = "\n".join(parts).rstrip() + "\n"
+    _write_text(table_tmdl, tmdl_text)
 
-    # dedupe
-    uniq = []
-    seen = set()
-    for r in rels_out:
-        key = (r["left_table"], r["left_column"], r["right_table"], r["right_column"])
-        if key not in seen:
-            uniq.append(r)
-            seen.add(key)
-    return uniq
+    # 3) Optionally add “obvious” relationships if both sides exist:
+    #    - Orders.Region = People.Region
+    #    - Orders.Order_ID = Returned.Order_ID
+    #    This mirrors the sample Ravi asked to preserve.
+    existing_tables = set(_read_existing_tables(tables_dir))
+    auto_rels: List[Tuple[str,str,str,str]] = []
+    if table_name in ("Orders", "People") and {"Orders", "People"}.issubset(existing_tables):
+        auto_rels.append(("Orders", "Region", "People", "Region"))
+    if table_name in ("Orders", "Returned") and {"Orders", "Returned"}.issubset(existing_tables):
+        auto_rels.append(("Orders", "Order_ID", "Returned", "Order_ID"))
 
-def render_relationships_tmdl(rels: List[Dict[str, str]]) -> str:
-    """
-    Generate a simple relationships.tmdl.
-    NOTE: If your template already ships a more elaborate one, you can swap this render.
-    """
-    lines: List[str] = []
-    lines.append("relationships")
-    lines.append("{")
-    for r in rels:
-        lt, lc, rt, rc = r["left_table"], r["left_column"], r["right_table"], r["right_column"]
-        name = f"{lt}_{lc}__{rt}_{rc}"
-        lines.append(f"  relationship '{name}'")
-        lines.append("  {")
-        lines.append(f"    fromColumn: {_fmt_ident(lt)}.'{lc}'")
-        lines.append(f"    toColumn: {_fmt_ident(rt)}.'{rc}'")
-        lines.append("    crossFilteringBehavior: oneDirection")
-        lines.append("  }")
-    lines.append("}")
-    return "\n".join(lines) + "\n"
+    if auto_rels:
+        _append_or_update_relationships(rel_path, auto_rels, behavior=None)
+
+    # 4) Log
+    print("✅ Integrated table:", table_name)
+    print("  -", table_tmdl)
+    print("  -", model_path)
+    print("  -", rel_path)
 
 # --------------------------
-# Main
+# CLI
 # --------------------------
+
 def main():
-    ap = argparse.ArgumentParser(description="Copy PBIP template → output, write table TMDL (columns + partition), ensure ref in model, and generate relationships.")
-    ap.add_argument("--xml", required=True, help="Path to Tableau datasource XML")
-    ap.add_argument("--pbip-template", required=True, help="PBIP template folder (.pbip as directory). If not a directory, a minimal scaffold will be created.")
-    ap.add_argument("--pbip-out", required=True, help="Output PBIP folder")
-    ap.add_argument("--table", required=True, help="Table name (e.g., Orders)")
-    ap.add_argument("--columns-file", required=True, help="Boss-style columns file (YAML-like list) OR pre-rendered TMDL snippet")
-    ap.add_argument("--partition-file", required=True, help="Power Query M partition block file (starting with 'partition <table> = m')")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--xml", required=True, help="Source Tableau XML (not strictly required to parse)")
+    ap.add_argument("--pbip-template", required=True, help="Path to PBIP template (.pbip folder)")
+    ap.add_argument("--pbip-out", required=True, help="Output PBIP folder (will be created from template if missing)")
+    ap.add_argument("--table", required=True, help="Table name to integrate (e.g., Orders)")
+    ap.add_argument("--columns-file", required=True, help="Columns spec (TMDL-style blocks or simple CSV-like lines)")
+    ap.add_argument("--partition-file", required=True, help="M block (let...in) for this table")
     args = ap.parse_args()
 
-    tpl = Path(args.pbip_template)
-    out = Path(args.pbip_out)
     xml_path = Path(args.xml)
-    columns_file = Path(args.columns_file)
-    partition_file = Path(args.partition_file)
-    table = args.table
+    template_dir = Path(args.pbip_template)
+    pbip_out_dir = Path(args.pbip_out)
+    table_name = args.table
+    cols_file = Path(args.columns_file)
+    part_file = Path(args.partition_file)
 
-    # 1) Copy/Scaffold PBIP
-    copy_pbip_template_if_needed(tpl, out)
+    if not cols_file.exists():
+        raise FileNotFoundError(f"Columns file not found: {cols_file}")
+    if not part_file.exists():
+        raise FileNotFoundError(f"Partition file not found: {part_file}")
 
-    # 2) Load columns
-    cols = load_columns_from_boss_style(columns_file)
-
-    # 3) Load partition text
-    part_text = partition_file.read_text(encoding="utf-8")
-
-    # 4) Render table TMDL
-    table_tmdl = render_table_tmdl(table, cols, part_text)
-
-    # 5) Write table file
-    tables_dir = out / "SemanticModel" / "definition" / "tables"
-    tables_dir.mkdir(parents=True, exist_ok=True)
-    (tables_dir / f"{table}.tmdl").write_text(table_tmdl, encoding="utf-8")
-
-    # 6) Ensure model.tmdl has ref table
-    model_path = out / "SemanticModel" / "definition" / "model.tmdl"
-    ensure_ref_table(model_path, table)
-
-    # 7) Generate relationships.tmdl from XML (complete set)
-    rels = parse_relationships_from_xml(xml_path)
-    rels_text = render_relationships_tmdl(rels)
-    (out / "SemanticModel" / "definition" / "relationships.tmdl").write_text(rels_text, encoding="utf-8")
-
-    print("✅ Integrated table:", table)
-    print("  -", tables_dir / f"{table}.tmdl")
-    print("  -", model_path)
-    print("  -", out / "SemanticModel" / "definition" / "relationships.tmdl")
+    integrate_table(
+        xml_path=xml_path,
+        template_dir=template_dir,
+        pbip_out_dir=pbip_out_dir,
+        table_name=table_name,
+        columns_file=cols_file,
+        partition_file=part_file,
+    )
 
 if __name__ == "__main__":
     main()

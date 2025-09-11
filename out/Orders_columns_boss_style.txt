@@ -26,7 +26,7 @@
   dataType: dateTime
   summarizeBy: none
   sourceColumn: Order_Date
-  # variation: isDefault; defaultHierarchy:Year
+  # variation: aggregation:Year
 - name: Order_ID
   dataType: string
   summarizeBy: none
@@ -71,7 +71,7 @@
   dataType: dateTime
   summarizeBy: none
   sourceColumn: Ship_Date
-  # variation: isDefault; defaultHierarchy:Year
+  # variation: aggregation:Year
 - name: Ship_Mode
   dataType: string
   summarizeBy: none

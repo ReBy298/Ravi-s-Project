@@ -6,7 +6,7 @@ model Model
 		legacyRedirects
 		returnErrorValuesAsNull
 
-annotation PBI_QueryOrder = ['Orders', 'People', 'Returned']
+annotation PBI_QueryOrder = @@tablenamelist@@
 
 annotation __PBI_TimeIntelligenceEnabled = 1
 
@@ -14,8 +14,6 @@ annotation PBIDesktopVersion = 2.137.1102.0 (24.10)
 
 annotation PBI_ProTooling = ["DevMode"]
 
-ref table Orders
-ref table People
-ref table Returned
+@@reftable@@
 
 ref cultureInfo en-US

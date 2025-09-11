@@ -78,18 +78,20 @@ $PYBIN "scaffold_pbip.py" \
 # 3) Post-processing (on final SemanticModel/definition)
 #    Important order:
 #      a) normalize (curly blocks → label style)
-#      b) polish tables (drop 'columns:' / 'partitions:', fix M braces, ensure annotation)
-#      c) polish relationships (optional rules)
+#      b) polish tables (drop 'columns:' / 'partitions:', ensure annotation)
+#      c) polish relationships (keep desired; drop LocalDateTable)
+#      d) enforce single braces + canonical M indentation
 # -------------------------
 BASE="${PBIP_NAME%.pbip}"
 DEF_DIR="$PROJECT_ROOT/OUT_PBIP/$BASE/$BASE.SemanticModel/definition"
+TABLES_DIR="$PROJECT_ROOT/OUT_PBIP/$BASE/$BASE.SemanticModel/tables"
 
 # a) Normalize TMDL style (introduces 'columns:'/'partitions:' labels from braces)
 if [ -f "normalize_tmdl_style.py" ]; then
   $PYBIN "normalize_tmdl_style.py" --root "$DEF_DIR"
 fi
 
-# b) Polish tables: remove wrappers, fix braces, ensure PBI_ResultType
+# b) Polish tables: remove wrappers, ensure PBI_ResultType
 if [ -f "polish_tables_tmdl.py" ]; then
   $PYBIN "polish_tables_tmdl.py" --definition-dir "$DEF_DIR"
 fi
@@ -100,6 +102,13 @@ if [ -f "polish_relationships_tmdl.py" ]; then
     --definition-dir "$DEF_DIR" \
     --keep "Orders.Region=People.Region,Orders.Order_ID=Returned.Order_ID" \
     --drop-localdatetable
+fi
+
+# d) Enforce single braces in M and canonical 2/4/6 indentation
+if [ -f "fix_m_indent_and_braces.py" ]; then
+  $PYBIN "fix_m_indent_and_braces.py" \
+    --tables-dir "$TABLES_DIR" \
+    --base-indent 2 --let-indent 2 --body-indent 4 --ret-indent 4
 fi
 
 # -------------------------

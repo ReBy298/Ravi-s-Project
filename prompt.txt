@@ -30,8 +30,8 @@ partition {table_name} = m
   source =
     let
       Source = Sql.Databases("{server}"),
-      srcSource = Source{{[Name="{dbname}"]}}[Data],
-      {table_name}_object = srcSource{{[Item="{table_name}",Schema="dbo"]}}[Data]
+      srcSource = Source{[Name="{dbname}"]}[Data],
+      {table_name}_object = srcSource{[Item="{table_name}", Schema="dbo"]}[Data]
     in
       {table_name}_object
 

@@ -2,12 +2,12 @@
   "version": "1.0",
   "artifacts": [
     {
-      "report": {
-        "path": "SampleTableau.Report"
-      }
+      "location": "SampleTableau.Report",
+      "type": "Report"
+    },
+    {
+      "location": "SampleTableau.SemanticModel",
+      "type": "SemanticModel"
     }
-  ],
-  "settings": {
-    "enableAutoRecovery": true
-  }
+  ]
 }
