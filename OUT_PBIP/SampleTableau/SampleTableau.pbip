@@ -4,10 +4,9 @@
     {
       "location": "SampleTableau.Report",
       "type": "Report"
-    },
-    {
-      "location": "SampleTableau.SemanticModel",
-      "type": "SemanticModel"
     }
-  ]
+  ],
+  "settings": {
+    "enableAutoRecovery": true
+  }
 }
